@@ -146,6 +146,7 @@ void SortVocab() {
   int a, size;
   unsigned int hash;
   // Sort the vocabulary and keep </s> at the first position
+  // count decrease
   qsort(&vocab[1], vocab_size - 1, sizeof(struct vocab_word), VocabCompare);
   for (a = 0; a < vocab_hash_size; a++) vocab_hash[a] = -1;
   size = vocab_size;
@@ -197,7 +198,10 @@ void ReduceVocab() {
 void CreateBinaryTree() {
   long long a, b, i, min1i, min2i, pos1, pos2, point[MAX_CODE_LENGTH];
   char code[MAX_CODE_LENGTH];
+  // actually, *count just need vocab_size * 2
   long long *count = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
+  // binary not explictly initialize to 0
+  // calloc doc: Allocate NMEMB elements of SIZE bytes each, all initialized to 0.
   long long *binary = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
   long long *parent_node = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
   for (a = 0; a < vocab_size; a++) count[a] = vocab[a].cn;
@@ -219,6 +223,7 @@ void CreateBinaryTree() {
       min1i = pos2;
       pos2++;
     }
+
     if (pos1 >= 0) {
       if (count[pos1] < count[pos2]) {
         min2i = pos1;
@@ -231,6 +236,7 @@ void CreateBinaryTree() {
       min2i = pos2;
       pos2++;
     }
+
     count[vocab_size + a] = count[min1i] + count[min2i];
     parent_node[min1i] = vocab_size + a;
     parent_node[min2i] = vocab_size + a;
@@ -245,12 +251,17 @@ void CreateBinaryTree() {
       point[i] = b;
       i++;
       b = parent_node[b];
+      // touch tree root
       if (b == vocab_size * 2 - 2) break;
     }
+    // codelen is char, when vocab counts is 1, 2, 4, ... 2^n,
+    // the tree's height may easy exceed 255, so change codelen to int
+    // may more appropriate
     vocab[a].codelen = i;
     vocab[a].point[0] = vocab_size - 2;
     for (b = 0; b < i; b++) {
       vocab[a].code[i - b - 1] = code[b];
+      // what does point mean?
       vocab[a].point[i - b] = point[b] - vocab_size;
     }
   }
@@ -336,22 +347,27 @@ void ReadVocab() {
 }
 
 void InitNet() {
+  // init matrix
   long long a, b;
   unsigned long long next_random = 1;
   a = posix_memalign((void **)&syn0, 128, (long long)vocab_size * layer1_size * sizeof(real));
   if (syn0 == NULL) {printf("Memory allocation failed\n"); exit(1);}
   if (hs) {
+    //  Hierarchical Softmax
     a = posix_memalign((void **)&syn1, 128, (long long)vocab_size * layer1_size * sizeof(real));
     if (syn1 == NULL) {printf("Memory allocation failed\n"); exit(1);}
     for (a = 0; a < vocab_size; a++) for (b = 0; b < layer1_size; b++)
      syn1[a * layer1_size + b] = 0;
   }
   if (negative>0) {
+    // negative sampling
     a = posix_memalign((void **)&syn1neg, 128, (long long)vocab_size * layer1_size * sizeof(real));
     if (syn1neg == NULL) {printf("Memory allocation failed\n"); exit(1);}
     for (a = 0; a < vocab_size; a++) for (b = 0; b < layer1_size; b++)
      syn1neg[a * layer1_size + b] = 0;
   }
+
+  // random init words vector
   for (a = 0; a < vocab_size; a++) for (b = 0; b < layer1_size; b++) {
     next_random = next_random * (unsigned long long)25214903917 + 11;
     syn0[a * layer1_size + b] = (((next_random & 0xFFFF) / (real)65536) - 0.5) / layer1_size;
@@ -369,6 +385,7 @@ void *TrainModelThread(void *id) {
   real *neu1 = (real *)calloc(layer1_size, sizeof(real));
   real *neu1e = (real *)calloc(layer1_size, sizeof(real));
   FILE *fi = fopen(train_file, "rb");
+  // parallel read files
   fseek(fi, file_size / (long long)num_threads * (long long)id, SEEK_SET);
   while (1) {
     if (word_count - last_word_count > 10000) {
@@ -384,6 +401,7 @@ void *TrainModelThread(void *id) {
       alpha = starting_alpha * (1 - word_count_actual / (real)(iter * train_words + 1));
       if (alpha < starting_alpha * 0.0001) alpha = starting_alpha * 0.0001;
     }
+
     if (sentence_length == 0) {
       while (1) {
         word = ReadWordIndex(fi);
@@ -403,6 +421,7 @@ void *TrainModelThread(void *id) {
       }
       sentence_position = 0;
     }
+
     if (feof(fi) || (word_count > train_words / num_threads)) {
       word_count_actual += word_count - last_word_count;
       local_iter--;
@@ -413,12 +432,16 @@ void *TrainModelThread(void *id) {
       fseek(fi, file_size / (long long)num_threads * (long long)id, SEEK_SET);
       continue;
     }
+
     word = sen[sentence_position];
+
     if (word == -1) continue;
+
     for (c = 0; c < layer1_size; c++) neu1[c] = 0;
     for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
     next_random = next_random * (unsigned long long)25214903917 + 11;
     b = next_random % window;
+
     if (cbow) {  //train the cbow architecture
       // in -> hidden
       cw = 0;
@@ -479,7 +502,8 @@ void *TrainModelThread(void *id) {
           for (c = 0; c < layer1_size; c++) syn0[c + last_word * layer1_size] += neu1e[c];
         }
       }
-    } else {  //train skip-gram
+    }
+    else {  //train skip-gram
       for (a = b; a < window * 2 + 1 - b; a++) if (a != window) {
         c = sentence_position - window + a;
         if (c < 0) continue;
@@ -550,11 +574,14 @@ void TrainModel() {
   if (read_vocab_file[0] != 0) ReadVocab(); else LearnVocabFromTrainFile();
   if (save_vocab_file[0] != 0) SaveVocab();
   if (output_file[0] == 0) return;
+  // done read vocabulary
   InitNet();
   if (negative > 0) InitUnigramTable();
   start = clock();
   for (a = 0; a < num_threads; a++) pthread_create(&pt[a], NULL, TrainModelThread, (void *)a);
   for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
+
+  // output results
   fo = fopen(output_file, "wb");
   if (classes == 0) {
     // Save the word vectors
