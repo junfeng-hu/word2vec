@@ -198,6 +198,7 @@ void ReduceVocab() {
 void CreateBinaryTree() {
   long long a, b, i, min1i, min2i, pos1, pos2, point[MAX_CODE_LENGTH];
   char code[MAX_CODE_LENGTH];
+  // leaf and inner nodes: N + L == 2 * N + 1 -> N = L - 1
   // actually, *count just need vocab_size * 2
   long long *count = (long long *)calloc(vocab_size * 2 + 1, sizeof(long long));
   // binary not explictly initialize to 0
@@ -444,39 +445,58 @@ void *TrainModelThread(void *id) {
 
     if (cbow) {  //train the cbow architecture
       // in -> hidden
+
+      // window word count
       cw = 0;
       for (a = b; a < window * 2 + 1 - b; a++) if (a != window) {
+        // sentence_position is sp
+        // c in [sp - (window - b), sp + (window - b)]
         c = sentence_position - window + a;
         if (c < 0) continue;
+        // may be is break?
+        // because c is increase
         if (c >= sentence_length) continue;
         last_word = sen[c];
         if (last_word == -1) continue;
+        // sum window words' vectors
         for (c = 0; c < layer1_size; c++) neu1[c] += syn0[c + last_word * layer1_size];
         cw++;
       }
+
       if (cw) {
         for (c = 0; c < layer1_size; c++) neu1[c] /= cw;
         if (hs) for (d = 0; d < vocab[word].codelen; d++) {
           f = 0;
           l2 = vocab[word].point[d] * layer1_size;
+          // l2 is index j in equation
+
           // Propagate hidden -> output
           for (c = 0; c < layer1_size; c++) f += neu1[c] * syn1[c + l2];
+          // f is +- hs_j
           if (f <= -MAX_EXP) continue;
           else if (f >= MAX_EXP) continue;
+          // approximation
+          // may be round is better
           else f = expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
           // 'g' is the gradient multiplied by the learning rate
+          // why sub code[d]?
+          // another sigmoid property
+          // \sigma(x) = 1 - \sigma(-x)
+          // code[d] is 0 or 1
           g = (1 - vocab[word].code[d] - f) * alpha;
           // Propagate errors output -> hidden
           for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1[c + l2];
           // Learn weights hidden -> output
           for (c = 0; c < layer1_size; c++) syn1[c + l2] += g * neu1[c];
         }
+
         // NEGATIVE SAMPLING
         if (negative > 0) for (d = 0; d < negative + 1; d++) {
+          // target is w_O, w_i
           if (d == 0) {
             target = word;
             label = 1;
-          } else {
+          } else { // random sample negative weight vector
             next_random = next_random * (unsigned long long)25214903917 + 11;
             target = table[(next_random >> 16) % table_size];
             if (target == 0) target = next_random % (vocab_size - 1) + 1;
@@ -485,11 +505,17 @@ void *TrainModelThread(void *id) {
           }
           l2 = target * layer1_size;
           f = 0;
+          // caculate ns
+          // syn1neg[l2] is v', neu1 is v_mcw
           for (c = 0; c < layer1_size; c++) f += neu1[c] * syn1neg[c + l2];
+          // caculate gradient
           if (f > MAX_EXP) g = (label - 1) * alpha;
           else if (f < -MAX_EXP) g = (label - 0) * alpha;
+          // \sigma(x) = 1 - \sigma(-x), and 0 label for -ns
           else g = (label - expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))]) * alpha;
+          // neu1e is added weight vector for each w_{t+q}
           for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1neg[c + l2];
+          // update v'
           for (c = 0; c < layer1_size; c++) syn1neg[c + l2] += g * neu1[c];
         }
         // hidden -> in
@@ -513,6 +539,7 @@ void *TrainModelThread(void *id) {
         l1 = last_word * layer1_size;
         for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
         // HIERARCHICAL SOFTMAX
+
         if (hs) for (d = 0; d < vocab[word].codelen; d++) {
           f = 0;
           l2 = vocab[word].point[d] * layer1_size;
@@ -720,6 +747,7 @@ int main(int argc, char **argv) {
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
   expTable = (real *)malloc((EXP_TABLE_SIZE + 1) * sizeof(real));
+  // excellent precompute sigmoid
   for (i = 0; i < EXP_TABLE_SIZE; i++) {
     expTable[i] = exp((i / (real)EXP_TABLE_SIZE * 2 - 1) * MAX_EXP); // Precompute the exp() table
     expTable[i] = expTable[i] / (expTable[i] + 1);                   // Precompute f(x) = x / (x + 1)
