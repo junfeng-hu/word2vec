@@ -545,6 +545,7 @@ void *TrainModelThread(void *id) {
           f = 0;
           l2 = vocab[word].point[d] * layer1_size;
           // Propagate hidden -> output
+          // l1 is w_{t+q}, l2 is n(w_t, j)
           for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1[c + l2];
           if (f <= -MAX_EXP) continue;
           else if (f >= MAX_EXP) continue;
@@ -560,6 +561,7 @@ void *TrainModelThread(void *id) {
         if (negative > 0) for (d = 0; d < negative + 1; d++) {
           if (d == 0) {
             target = word;
+            // should target = last_word;
             label = 1;
           } else {
             next_random = next_random * (unsigned long long)25214903917 + 11;
@@ -570,6 +572,8 @@ void *TrainModelThread(void *id) {
           }
           l2 = target * layer1_size;
           f = 0;
+          // l1 is w_{t+q}, l2 is in [w_t, w_i \sim P_n(w)]
+          // l1 should be w_t
           for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1neg[c + l2];
           if (f > MAX_EXP) g = (label - 1) * alpha;
           else if (f < -MAX_EXP) g = (label - 0) * alpha;
