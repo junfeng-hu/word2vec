@@ -442,7 +442,115 @@ void *TrainModelThread(void *id) {
     for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
     next_random = next_random * (unsigned long long)25214903917 + 11;
     b = next_random % window;
+#ifdef FIX_SKIP_GRAM
+    // junfeng added
+    // see http://junfenglx.github.io/word2vec-train-procedure-explained.html#skip-gram
+    if (cbow) {  //train the cbow architecture
+      for (a = b; a < window * 2 + 1 - b; a++) if (a != window) {
+        c = sentence_position - window + a;
+        if (c < 0) continue;
+        if (c >= sentence_length) continue;
+        last_word = sen[c];
+        if (last_word == -1) continue;
+        l1 = last_word * layer1_size;
+        for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
+        // HIERARCHICAL SOFTMAX
 
+        if (hs) for (d = 0; d < vocab[word].codelen; d++) {
+          f = 0;
+          l2 = vocab[word].point[d] * layer1_size;
+          // Propagate hidden -> output
+          for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1[c + l2];
+          if (f <= -MAX_EXP) continue;
+          else if (f >= MAX_EXP) continue;
+          else f = expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
+          // 'g' is the gradient multiplied by the learning rate
+          g = (1 - vocab[word].code[d] - f) * alpha;
+          // Propagate errors output -> hidden
+          for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1[c + l2];
+          // Learn weights hidden -> output
+          for (c = 0; c < layer1_size; c++) syn1[c + l2] += g * syn0[c + l1];
+        }
+        // NEGATIVE SAMPLING
+        if (negative > 0) for (d = 0; d < negative + 1; d++) {
+          if (d == 0) {
+            target = word;
+            label = 1;
+          } else {
+            next_random = next_random * (unsigned long long)25214903917 + 11;
+            target = table[(next_random >> 16) % table_size];
+            if (target == 0) target = next_random % (vocab_size - 1) + 1;
+            if (target == word) continue;
+            label = 0;
+          }
+          l2 = target * layer1_size;
+          f = 0;
+          for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1neg[c + l2];
+          if (f > MAX_EXP) g = (label - 1) * alpha;
+          else if (f < -MAX_EXP) g = (label - 0) * alpha;
+          else g = (label - expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))]) * alpha;
+          for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1neg[c + l2];
+          for (c = 0; c < layer1_size; c++) syn1neg[c + l2] += g * syn0[c + l1];
+        }
+        // Learn weights input -> hidden
+        for (c = 0; c < layer1_size; c++) syn0[c + l1] += neu1e[c];
+      }
+    }
+    else {  //train skip-gram
+      // just update w_t once
+      l1 = word * layer1_size;
+      for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
+
+      for (a = b; a < window * 2 + 1 - b; a++) if (a != window) {
+        c = sentence_position - window + a;
+        if (c < 0) continue;
+        if (c >= sentence_length) continue;
+        last_word = sen[c];
+        if (last_word == -1) continue;
+
+        // HIERARCHICAL SOFTMAX
+
+        if (hs) for (d = 0; d < vocab[last_word].codelen; d++) {
+          f = 0;
+          l2 = vocab[last_word].point[d] * layer1_size;
+          // Propagate hidden -> output
+          for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1[c + l2];
+          if (f <= -MAX_EXP) continue;
+          else if (f >= MAX_EXP) continue;
+          else f = expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
+          // 'g' is the gradient multiplied by the learning rate
+          g = (1 - vocab[last_word].code[d] - f) * alpha;
+          // Propagate errors output -> hidden
+          for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1[c + l2];
+          // Learn weights hidden -> output
+          for (c = 0; c < layer1_size; c++) syn1[c + l2] += g * syn0[c + l1];
+        }
+        // NEGATIVE SAMPLING
+        if (negative > 0) for (d = 0; d < negative + 1; d++) {
+          if (d == 0) {
+            target = last_word;
+            label = 1;
+          } else {
+            next_random = next_random * (unsigned long long)25214903917 + 11;
+            target = table[(next_random >> 16) % table_size];
+            if (target == 0) target = next_random % (vocab_size - 1) + 1;
+            if (target == last_word) continue;
+            label = 0;
+          }
+          l2 = target * layer1_size;
+          f = 0;
+          for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1neg[c + l2];
+          if (f > MAX_EXP) g = (label - 1) * alpha;
+          else if (f < -MAX_EXP) g = (label - 0) * alpha;
+          else g = (label - expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))]) * alpha;
+          for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1neg[c + l2];
+          for (c = 0; c < layer1_size; c++) syn1neg[c + l2] += g * syn0[c + l1];
+        }
+      }
+      // Learn weights input -> hidden
+      for (c = 0; c < layer1_size; c++) syn0[c + l1] += neu1e[c];
+    }
+#else
     if (cbow) {  //train the cbow architecture
       // in -> hidden
 
@@ -580,6 +688,8 @@ void *TrainModelThread(void *id) {
         for (c = 0; c < layer1_size; c++) syn0[c + l1] += neu1e[c];
       }
     }
+#endif
+
     sentence_position++;
     if (sentence_position >= sentence_length) {
       sentence_length = 0;
@@ -752,6 +862,9 @@ int main(int argc, char **argv) {
     expTable[i] = exp((i / (real)EXP_TABLE_SIZE * 2 - 1) * MAX_EXP); // Precompute the exp() table
     expTable[i] = expTable[i] / (expTable[i] + 1);                   // Precompute f(x) = x / (x + 1)
   }
+#ifdef FIX_SKIP_GRAM
+  printf("uses fixed skip-gram version\n");
+#endif
   TrainModel();
   return 0;
 }
